@@ -1,0 +1,218 @@
+version: "3.9"
+
+# ============================================================
+# Phase 1: Kafka Foundation — FULL RUNNABLE STACK
+# ============================================================
+# One command starts everything:
+#   docker compose up -d
+#
+# Then open:
+#   Dashboard  → http://localhost:8888   (live UI)
+#   Kafdrop    → http://localhost:9000   (Kafka browser)
+#   PostgreSQL → localhost:5432
+#
+# Services:
+#   Infrastructure: zookeeper, kafka, kafka-init, kafdrop, postgres
+#   Pipeline:       producer, consumer-a, consumer-b, dashboard
+# ============================================================
+
+networks:
+  kafka-net:
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  kafka-data:
+  postgres-data:
+
+services:
+
+  # ── Zookeeper ─────────────────────────────────────────────
+  # Kafka's coordination service. Stores cluster metadata,
+  # manages leader election, tracks broker health.
+  # (Newer Kafka uses KRaft mode instead, but Zookeeper is
+  #  still the most widely used and documented setup.)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    networks: [kafka-net]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka Broker ───────────────────────────────────────────
+  # The message broker. Producers write here; consumers read.
+  # Two listeners:
+  #   PLAINTEXT://kafka:9092      → container-to-container
+  #   PLAINTEXT_HOST://localhost:29092 → host machine access
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    networks: [kafka-net]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "29092:29092"    # host access for local scripts
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # we create explicitly below
+      KAFKA_LOG_RETENTION_HOURS: 168             # keep messages for 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ── Topic Initializer ──────────────────────────────────────
+  # Creates the raw-market-data topic with 3 partitions.
+  # 3 partitions = allows up to 3 consumers in the same group
+  # to process in parallel. Key-based routing (entity_id) means
+  # all events for HDFC.NS always land on the same partition.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-init
+    networks: [kafka-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: >-
+      echo '=== Creating Kafka topics ===' &&
+      kafka-topics --create --if-not-exists --topic raw-market-data --partitions 3 --replication-factor 1 --bootstrap-server kafka:9092 &&
+      echo '=== Topic list ===' &&
+      kafka-topics --list --bootstrap-server kafka:9092 &&
+      echo '=== Topic details ===' &&
+      kafka-topics --describe --topic raw-market-data --bootstrap-server kafka:9092 &&
+      echo '=== Done ==='
+    restart: "no"
+
+  # ── Kafdrop (Web UI) ───────────────────────────────────────
+  # Browse topics, partitions, consumer groups, and messages.
+  # See per-partition offset, consumer lag, message content.
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    container_name: kafdrop
+    networks: [kafka-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: kafka:9092
+      JVM_OPTS: "-Xms32M -Xmx64M"
+      SERVER_SERVLET_CONTEXTPATH: "/"
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  # consumer_group_b writes consumed events here.
+  # Demonstrates that a Kafka consumer can drive any downstream.
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    networks: [kafka-net]
+    ports:
+      - "5433:5432"    # 5432 in use by another project; internal traffic still uses 5432
+    environment:
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline123
+      POSTGRES_DB: market_data
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/phase1_init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d market_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Market Data Producer ───────────────────────────────────
+  # Generates NSE price events for 8 symbols every 5 seconds.
+  # Partitioning key = entity_id, so HDFC.NS always → P0 (etc).
+  producer:
+    build: ./connectors/rest_api_connector
+    container_name: producer
+    networks: [kafka-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: raw-market-data
+      INTERVAL: "5"
+    restart: unless-stopped
+
+  # ── Consumer Group A (Analytics) ──────────────────────────
+  # Independent consumer group — gets its own copy of every
+  # message. Prints coloured output to container logs.
+  consumer-a:
+    build: ./consumers
+    container_name: consumer-a
+    networks: [kafka-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: python consumer_group_a.py
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: raw-market-data
+    restart: unless-stopped
+
+  # ── Consumer Group B (Storage → PostgreSQL) ───────────────
+  # Batches 10 messages, writes to market_prices table, then
+  # commits offset (at-least-once with idempotent INSERT).
+  consumer-b:
+    build: ./consumers
+    container_name: consumer-b
+    networks: [kafka-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: python consumer_group_b.py
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: raw-market-data
+      POSTGRES_DSN: "host=postgres port=5432 dbname=market_data user=pipeline password=pipeline123"
+    restart: unless-stopped
+
+  # ── Pipeline Dashboard ─────────────────────────────────────
+  # FastAPI + WebSocket live dashboard. Open http://localhost:8888
+  # Shows: live prices, consumer group lag, PostgreSQL records,
+  # partition routing. WebSocket streams every Kafka message.
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    networks: [kafka-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8888:8888"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: raw-market-data
+      POSTGRES_DSN: "host=postgres port=5432 dbname=market_data user=pipeline password=pipeline123"
+      PORT: "8888"
+    restart: unless-stopped

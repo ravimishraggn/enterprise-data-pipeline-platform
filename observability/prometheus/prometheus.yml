@@ -1,0 +1,53 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: rest-api-connector
+    static_configs:
+      - targets: ["rest-api-connector:8001"]
+    metrics_path: /metrics
+
+  - job_name: webhook-receiver
+    static_configs:
+      - targets: ["webhook-receiver:8002"]
+    metrics_path: /metrics
+
+  - job_name: stream-processor
+    static_configs:
+      - targets: ["stream-processor:8003"]
+    metrics_path: /metrics
+
+  - job_name: opensearch-writer
+    static_configs:
+      - targets: ["opensearch-writer:8004"]
+    metrics_path: /metrics
+
+  - job_name: postgres-writer
+    static_configs:
+      - targets: ["postgres-writer:8005"]
+    metrics_path: /metrics
+
+  - job_name: minio-sink
+    static_configs:
+      - targets: ["minio-sink:8006"]
+    metrics_path: /metrics
+
+  - job_name: redis-writer
+    static_configs:
+      - targets: ["redis-writer:8007"]
+    metrics_path: /metrics
+
+  - job_name: lineage-tracker
+    static_configs:
+      - targets: ["lineage-tracker:8010"]
+    metrics_path: /metrics
+
+  - job_name: pii-detector
+    static_configs:
+      - targets: ["pii-detector:8011"]
+    metrics_path: /metrics

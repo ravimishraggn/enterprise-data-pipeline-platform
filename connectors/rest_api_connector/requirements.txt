@@ -1,0 +1,2 @@
+# Phase 1 – producer only
+kafka-python==2.0.2

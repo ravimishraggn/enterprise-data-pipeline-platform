@@ -1,0 +1,113 @@
+{
+  "title": "Enterprise Pipeline Overview",
+  "uid": "pipeline-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Messages Produced (all topics)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(pipeline_messages_produced_total[5m]))",
+        "legendFormat": "Produced/5m"
+      }],
+      "options": { "colorMode": "background" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" } } }
+    },
+    {
+      "id": 2,
+      "title": "Messages Consumed (all services)",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(pipeline_messages_consumed_total[5m]))",
+        "legendFormat": "Consumed/5m"
+      }]
+    },
+    {
+      "id": 3,
+      "title": "Processing Errors",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(pipeline_processing_errors_total[5m]))",
+        "legendFormat": "Errors/5m"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 10, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "PII Detections",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(pii_detections_total[5m]))",
+        "legendFormat": "PII/5m"
+      }]
+    },
+    {
+      "id": 5,
+      "title": "Message Throughput by Service",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "targets": [
+        { "expr": "rate(pipeline_messages_produced_total[1m])", "legendFormat": "{{job}} produce/s" },
+        { "expr": "rate(pipeline_messages_consumed_total[1m])", "legendFormat": "{{job}} consume/s" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Processing Latency p99 (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "histogram_quantile(0.99, rate(pipeline_processing_duration_seconds_bucket[5m])) * 1000",
+        "legendFormat": "{{job}} p99"
+      }]
+    },
+    {
+      "id": 7,
+      "title": "Risk Score Distribution",
+      "type": "histogram",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "pipeline_transaction_risk_score_bucket",
+        "legendFormat": "{{le}}"
+      }]
+    },
+    {
+      "id": 8,
+      "title": "DLQ Messages",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 6 },
+      "targets": [{
+        "expr": "increase(pipeline_dlq_messages_total[5m])",
+        "legendFormat": "DLQ/5m"
+      }]
+    },
+    {
+      "id": 9,
+      "title": "Lineage Events Tracked",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 6 },
+      "targets": [{
+        "expr": "increase(lineage_events_tracked_total[5m])",
+        "legendFormat": "Lineage/5m"
+      }]
+    }
+  ]
+}
